@@ -115,23 +115,49 @@ jobs:
       - name: Azure CLI version
         run: az --version
         
-      - name: Install dependencies (unzip, curl)
+      - name: Install kubelogin (client-go credential plugin) 
         run: |
+          set -euo pipefail
           sudo apt-get update -y
-          sudo apt-get install -y unzip curl
+          sudo apt-get install -y curl unzip
       
-      - name: Install kubelogin (Azure AD client-go plugin)
-        env:
-          KUBELOGIN_VERSION: "v0.0.30"   # change if you want a different release
-        run: |
-          # fetch the github release asset (linux_amd64 zip), unzip, move to /usr/local/bin
-          URL="https://github.com/Azure/kubelogin/releases/download/${KUBELOGIN_VERSION}/kubelogin_${KUBELOGIN_VERSION#v}_linux_amd64.zip"
-          echo "Downloading $URL"
-          curl -sL -o /tmp/kubelogin.zip "$URL"
-          unzip -o /tmp/kubelogin.zip -d /tmp
-          sudo mv /tmp/kubelogin /usr/local/bin/kubelogin
-          sudo chmod +x /usr/local/bin/kubelogin
-          kubelogin --version || true
+          # Try Azure kubelogin first (asset name: kubelogin-linux-amd64.zip)
+          KUBELOGIN_VERSION="v0.2.12"   # known existing release; change if you want another
+          KUBELOGIN_URL_AZ="https://github.com/Azure/kubelogin/releases/download/${KUBELOGIN_VERSION}/kubelogin-linux-amd64.zip"
+          KUBELOGIN_URL_INT128="https://github.com/int128/kubelogin/releases/download/${KUBELOGIN_VERSION}/kubelogin_linux_amd64.zip"
+      
+          echo "Attempting to download kubelogin from Azure: $KUBELOGIN_URL_AZ"
+          if curl -fsSL --retry 3 -o /tmp/kubelogin.zip "$KUBELOGIN_URL_AZ"; then
+            echo "Downloaded kubelogin from Azure/kubelogin"
+          else
+            echo "Azure asset download failed, trying int128 kubelogin asset"
+            if curl -fsSL --retry 3 -o /tmp/kubelogin.zip "$KUBELOGIN_URL_INT128"; then
+              echo "Downloaded kubelogin from int128/kubelogin"
+            else
+              echo "Both kubelogin download attempts failed; aborting"
+              exit 1
+            fi
+          fi
+      
+          # Validate zip and extract kubelogin binary
+          if unzip -l /tmp/kubelogin.zip >/dev/null 2>&1; then
+            unzip -o /tmp/kubelogin.zip -d /tmp/kubelogin_extracted
+            # find binary inside extracted tree (filename may be 'kubelogin' or 'kubelogin.exe')
+            BIN_CANDIDATE=$(find /tmp/kubelogin_extracted -type f -name 'kubelogin*' | head -n1 || true)
+            if [ -z "$BIN_CANDIDATE" ]; then
+              echo "kubelogin binary not found inside zip; listing files for debugging:"
+              ls -la /tmp/kubelogin_extracted || true
+              exit 1
+            fi
+            sudo mv "$BIN_CANDIDATE" /usr/local/bin/kubelogin
+            sudo chmod +x /usr/local/bin/kubelogin
+            kubelogin --version || true
+            echo "kubelogin installed to /usr/local/bin/kubelogin"
+          else
+            echo "Downloaded file is not a valid zip: /tmp/kubelogin.zip"
+            exit 1
+          fi
+
 
 
       - name: Set kubectl context for AKS

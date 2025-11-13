@@ -114,94 +114,126 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Login to Azure
-        uses: azure/login@v2
+      ## from aks repo
+      # Set the target Azure Kubernetes Service (AKS) cluster. 
+      - uses: azure/aks-set-context@v1
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Azure CLI version
-        run: az --version
+          creds: '${{ secrets.AZURE_CREDENTIALS }}'
+          cluster-name: ${{ env.CLUSTER_NAME }}
+          resource-group: ${{ env.CLUSTER_RESOURCE_GROUP }}
       
-      - name: Install kubelogin (client-go credential plugin) 
-        run: |
-          set -euo pipefail
-          sudo apt-get update -y
-          sudo apt-get install -y curl unzip
+      # Create namespace if doesn't exist
+      - run: |
+          kubectl create namespace ${{ env.NAMESPACE }} --dry-run -o json | kubectl apply -f -
       
-          # Try Azure kubelogin first (asset name: kubelogin-linux-amd64.zip)
-          KUBELOGIN_VERSION="v0.2.12"   # known existing release; change if you want another
-          KUBELOGIN_URL_AZ="https://github.com/Azure/kubelogin/releases/download/${KUBELOGIN_VERSION}/kubelogin-linux-amd64.zip"
-          KUBELOGIN_URL_INT128="https://github.com/int128/kubelogin/releases/download/${KUBELOGIN_VERSION}/kubelogin_linux_amd64.zip"
-      
-          echo "Attempting to download kubelogin from Azure: $KUBELOGIN_URL_AZ"
-          if curl -fsSL --retry 3 -o /tmp/kubelogin.zip "$KUBELOGIN_URL_AZ"; then
-            echo "Downloaded kubelogin from Azure/kubelogin"
-          else
-            echo "Azure asset download failed, trying int128 kubelogin asset"
-            if curl -fsSL --retry 3 -o /tmp/kubelogin.zip "$KUBELOGIN_URL_INT128"; then
-              echo "Downloaded kubelogin from int128/kubelogin"
-            else
-              echo "Both kubelogin download attempts failed; aborting"
-              exit 1
-            fi
-          fi
-      
-          # Validate zip and extract kubelogin binary
-          if unzip -l /tmp/kubelogin.zip >/dev/null 2>&1; then
-            unzip -o /tmp/kubelogin.zip -d /tmp/kubelogin_extracted
-            # find binary inside extracted tree (filename may be 'kubelogin' or 'kubelogin.exe')
-            BIN_CANDIDATE=$(find /tmp/kubelogin_extracted -type f -name 'kubelogin*' | head -n1 || true)
-            if [ -z "$BIN_CANDIDATE" ]; then
-              echo "kubelogin binary not found inside zip; listing files for debugging:"
-              ls -la /tmp/kubelogin_extracted || true
-              exit 1
-            fi
-            sudo mv "$BIN_CANDIDATE" /usr/local/bin/kubelogin
-            sudo chmod +x /usr/local/bin/kubelogin
-            kubelogin --version || true
-            echo "kubelogin installed to /usr/local/bin/kubelogin"
-          else
-            echo "Downloaded file is not a valid zip: /tmp/kubelogin.zip"
-            exit 1
-          fi
-
-
-
-      - name: Set kubectl context for AKS
-        uses: azure/aks-set-context@v3
+      # Create imagepullsecret for Azure Container registry (ACR)
+      - uses: azure/k8s-create-secret@v1
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-          cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
-          resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
+          container-registry-url: ${{ env.REGISTRY_NAME }}.azurecr.io
+          container-registry-username: ${{ secrets.REGISTRY_USERNAME }}
+          container-registry-password: ${{ secrets.REGISTRY_PASSWORD }}
+          secret-name: ${{ env.REGISTRY_NAME }}-registry-connection
+          namespace: ${{ env.NAMESPACE }}
+      
+      # Deploy app to AKS
+      - uses: azure/k8s-deploy@v1
+        with:
+          manifests: |
+            manifests/deployment.yml
+            manifests/service.yml
+          images: |
+            ${{ env.REGISTRY_NAME }}.azurecr.io/myimage:${{ github.sha }}
+          imagepullsecrets: |
+            ${{ env.REGISTRY_NAME }}-registry-connection
+          namespace: ${{ env.NAMESPACE }}
+      # - name: Login to Azure
+      #   uses: azure/login@v2
+      #   with:
+      #     creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Replace image in k8s manifests and deploy
-        env:
-          DOCKERHUB_USERNAME: ${{ env.DOCKERHUB_USERNAME }}
-          DOCKERHUB_REPO: ${{ env.REPO }}
-          IMAGE_TAG: ${{ env.IMAGE_TAG }}
-          K8S_MANIFEST_DIR: ${{ env.K8S_MANIFEST_DIR }}
-        run: |
-          IMAGE="${DOCKERHUB_USERNAME}/${DOCKERHUB_REPO}:${IMAGE_TAG}"
-          echo "Deploying image: $IMAGE"
+      # - name: Azure CLI version
+      #   run: az --version
+      
+      # - name: Install kubelogin (client-go credential plugin) 
+      #   run: |
+      #     set -euo pipefail
+      #     sudo apt-get update -y
+      #     sudo apt-get install -y curl unzip
+      
+      #     # Try Azure kubelogin first (asset name: kubelogin-linux-amd64.zip)
+      #     KUBELOGIN_VERSION="v0.2.12"   # known existing release; change if you want another
+      #     KUBELOGIN_URL_AZ="https://github.com/Azure/kubelogin/releases/download/${KUBELOGIN_VERSION}/kubelogin-linux-amd64.zip"
+      #     KUBELOGIN_URL_INT128="https://github.com/int128/kubelogin/releases/download/${KUBELOGIN_VERSION}/kubelogin_linux_amd64.zip"
+      
+      #     echo "Attempting to download kubelogin from Azure: $KUBELOGIN_URL_AZ"
+      #     if curl -fsSL --retry 3 -o /tmp/kubelogin.zip "$KUBELOGIN_URL_AZ"; then
+      #       echo "Downloaded kubelogin from Azure/kubelogin"
+      #     else
+      #       echo "Azure asset download failed, trying int128 kubelogin asset"
+      #       if curl -fsSL --retry 3 -o /tmp/kubelogin.zip "$KUBELOGIN_URL_INT128"; then
+      #         echo "Downloaded kubelogin from int128/kubelogin"
+      #       else
+      #         echo "Both kubelogin download attempts failed; aborting"
+      #         exit 1
+      #       fi
+      #     fi
+      
+      #     # Validate zip and extract kubelogin binary
+      #     if unzip -l /tmp/kubelogin.zip >/dev/null 2>&1; then
+      #       unzip -o /tmp/kubelogin.zip -d /tmp/kubelogin_extracted
+      #       # find binary inside extracted tree (filename may be 'kubelogin' or 'kubelogin.exe')
+      #       BIN_CANDIDATE=$(find /tmp/kubelogin_extracted -type f -name 'kubelogin*' | head -n1 || true)
+      #       if [ -z "$BIN_CANDIDATE" ]; then
+      #         echo "kubelogin binary not found inside zip; listing files for debugging:"
+      #         ls -la /tmp/kubelogin_extracted || true
+      #         exit 1
+      #       fi
+      #       sudo mv "$BIN_CANDIDATE" /usr/local/bin/kubelogin
+      #       sudo chmod +x /usr/local/bin/kubelogin
+      #       kubelogin --version || true
+      #       echo "kubelogin installed to /usr/local/bin/kubelogin"
+      #     else
+      #       echo "Downloaded file is not a valid zip: /tmp/kubelogin.zip"
+      #       exit 1
+      #     fi
 
-          if [ ! -d "$K8S_MANIFEST_DIR" ]; then
-            echo "No k8s manifest dir ($K8S_MANIFEST_DIR) found — aborting deploy"
-            exit 1
-          fi
 
-          # Replace placeholder IMAGE_PLACEHOLDER in yaml files and apply
-          for f in $(find $K8S_MANIFEST_DIR -type f -name '*.yml' -o -name '*.yaml'); do
-            echo "Processing $f"
-            # create a temp copy so we don't modify repo contents permanently
-            tmp="$(mktemp)"
-            sed "s|IMAGE_PLACEHOLDER|$IMAGE|g" "$f" > "$tmp"
-            kubectl apply -f "$tmp"
-            rm -f "$tmp"
-          done
 
-      - name: Verify deployment rollout (informational)
-        run: |
-          echo "To check rollout status manually, run:"
-          echo "  kubectl get pods -n <namespace> -l app=pgmicroservice"
-          echo "  kubectl rollout status deployment/pgmicroservice -n <namespace>"
+      # - name: Set kubectl context for AKS
+      #   uses: azure/aks-set-context@v3
+      #   with:
+      #     creds: ${{ secrets.AZURE_CREDENTIALS }}
+      #     cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
+      #     resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
+
+      # - name: Replace image in k8s manifests and deploy
+      #   env:
+      #     DOCKERHUB_USERNAME: ${{ env.DOCKERHUB_USERNAME }}
+      #     DOCKERHUB_REPO: ${{ env.REPO }}
+      #     IMAGE_TAG: ${{ env.IMAGE_TAG }}
+      #     K8S_MANIFEST_DIR: ${{ env.K8S_MANIFEST_DIR }}
+      #   run: |
+      #     IMAGE="${DOCKERHUB_USERNAME}/${DOCKERHUB_REPO}:${IMAGE_TAG}"
+      #     echo "Deploying image: $IMAGE"
+
+      #     if [ ! -d "$K8S_MANIFEST_DIR" ]; then
+      #       echo "No k8s manifest dir ($K8S_MANIFEST_DIR) found — aborting deploy"
+      #       exit 1
+      #     fi
+
+      #     # Replace placeholder IMAGE_PLACEHOLDER in yaml files and apply
+      #     for f in $(find $K8S_MANIFEST_DIR -type f -name '*.yml' -o -name '*.yaml'); do
+      #       echo "Processing $f"
+      #       # create a temp copy so we don't modify repo contents permanently
+      #       tmp="$(mktemp)"
+      #       sed "s|IMAGE_PLACEHOLDER|$IMAGE|g" "$f" > "$tmp"
+      #       kubectl apply -f "$tmp"
+      #       rm -f "$tmp"
+      #     done
+
+      # - name: Verify deployment rollout (informational)
+      #   run: |
+      #     echo "To check rollout status manually, run:"
+      #     echo "  kubectl get pods -n <namespace> -l app=pgmicroservice"
+      #     echo "  kubectl rollout status deployment/pgmicroservice -n <namespace>"
 

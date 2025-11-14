@@ -2,13 +2,13 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: pgmicroservice-ingress
-  namespace: muhammadsuryanto-cpu          # change if your namespace is different
+  namespace: dockeranto1          # change if your namespace is different
   annotations:
     kubernetes.io/ingress.class: nginx
 spec:
   ingressClassName: nginx
   rules:
-    - host: herifauzan.57.158.184.247.nip.io
+    - host: dockeranto1.57.158.184.247.nip.io
       http:
         paths:
           - path: /
